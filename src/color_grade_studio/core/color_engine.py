@@ -68,6 +68,9 @@ class GradeParams:
             hue_shift=self.hue_shift + manual.hue_shift,
             vignette=max(self.vignette, manual.vignette),
             fade=max(self.fade, manual.fade),
+            # v2 fields: not exposed via manual sliders, so the preset's values
+            # pass through unchanged. Halation alone takes a max so a future
+            # slider can only enhance — never reduce — the preset's bloom.
             shadows_hsl=self.shadows_hsl,
             midtones_hsl=self.midtones_hsl,
             highlights_hsl=self.highlights_hsl,
