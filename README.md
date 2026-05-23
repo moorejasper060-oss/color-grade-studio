@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/screenshots/logo.png" width="160" alt="Color Grade Studio logo">
+</p>
+
 # Color Grade Studio
 
 A Windows desktop app for fast video color grading. Load a clip, pick a look

@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 ENTRY = SRC / "color_grade_studio" / "main.py"
 NAME = "ColorGradeStudio"
+ICON_ICO = SRC / "color_grade_studio" / "resources" / "icons" / "app.ico"
+ICON_PNG = SRC / "color_grade_studio" / "resources" / "icons" / "app.png"
 
 
 def locate_ffmpeg() -> tuple[Path, Path | None]:
@@ -42,6 +44,8 @@ def parse_args() -> argparse.Namespace:
                     help="bundle as a single .exe (slower first-launch)")
     ap.add_argument("--clean", action="store_true",
                     help="remove previous build/dist directories first")
+    ap.add_argument("--skip-verify", action="store_true",
+                    help="skip the post-build smoke test")
     return ap.parse_args()
 
 
@@ -81,10 +85,20 @@ def main() -> int:
     else:
         cmd.append("--onedir")
 
+    if ICON_ICO.exists():
+        cmd += ["--icon", str(ICON_ICO)]
+    else:
+        print(f"WARNING: icon missing at {ICON_ICO} — exe will use the default icon. "
+              f"Run `python tools/generate_logo.py` first.")
+
     # Bundle ffmpeg binaries next to the exe (PyInstaller dest of '.').
     cmd += ["--add-binary", f"{ffmpeg};."]
     if ffprobe:
         cmd += ["--add-binary", f"{ffprobe};."]
+
+    # Bundle the PNG icon so QApplication.setWindowIcon can find it at runtime.
+    if ICON_PNG.exists():
+        cmd += ["--add-data", f"{ICON_PNG};color_grade_studio/resources/icons"]
 
     cmd.append(str(ENTRY))
 
@@ -95,11 +109,21 @@ def main() -> int:
 
     dist_dir = ROOT / "dist" / NAME
     exe = (ROOT / "dist" / f"{NAME}.exe") if args.onefile else (dist_dir / f"{NAME}.exe")
-    if exe.exists():
-        print(f"\nBuilt: {exe}")
-    else:
+    if not exe.exists():
         print(f"\nCould not locate built exe (expected {exe})")
         return 1
+
+    print(f"\nBuilt: {exe}")
+
+    if not args.skip_verify:
+        print("Verifying the built exe boots cleanly...")
+        rc = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "verify_exe.py"), str(exe)],
+            cwd=ROOT,
+        ).returncode
+        if rc != 0:
+            print("Verification FAILED. The exe exists but does not boot cleanly.")
+            return rc
     return 0
 
 
