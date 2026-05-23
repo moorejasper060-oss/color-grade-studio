@@ -323,3 +323,31 @@ def test_compute_combined_lut_with_identity_input_lut():
     diff = np.abs(no_input.table - with_identity.table).max()
     # Allow a touch more slack because two trilinear lookups stack.
     assert diff < 3e-3
+
+
+def test_tone_curve_identity_is_noop():
+    """Default tone_curve must not change pixels (within rounding)."""
+    from color_grade_studio.core.color_engine import _tone_curve
+    import numpy as np
+    rng = np.random.default_rng(1)
+    img = rng.random((16, 24, 3), dtype=np.float32)
+    out = _tone_curve(img, (0.0, 0.25, 0.5, 0.75, 1.0))
+    np.testing.assert_allclose(out, img, atol=2e-3)
+
+
+def test_tone_curve_lifts_midtones():
+    """Bumping the mid-output above 0.5 lifts mid-grays."""
+    from color_grade_studio.core.color_engine import _tone_curve
+    import numpy as np
+    img = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    out = _tone_curve(img, (0.0, 0.25, 0.65, 0.85, 1.0))  # mid 0.5 -> 0.65
+    assert out.mean() > 0.6
+
+
+def test_tone_curve_crushes_blacks():
+    """Lowering low-mid-output crushes shadows."""
+    from color_grade_studio.core.color_engine import _tone_curve
+    import numpy as np
+    img = np.full((4, 4, 3), 0.25, dtype=np.float32)
+    out = _tone_curve(img, (0.0, 0.10, 0.5, 0.75, 1.0))  # lo_mid 0.25 -> 0.10
+    assert out.mean() < 0.20

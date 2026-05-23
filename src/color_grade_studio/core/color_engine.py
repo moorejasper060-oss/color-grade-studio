@@ -274,6 +274,63 @@ def _contrast(f: np.ndarray, amount: float) -> np.ndarray:
     return flat
 
 
+def _tone_curve(
+    f: np.ndarray,
+    pts: Tuple[float, float, float, float, float],
+) -> np.ndarray:
+    """Apply a 5-point monotonic curve to every channel via a 256-entry LUT.
+
+    Inputs are clamped to [0, 1]; outputs are clamped to [0, 1] after the
+    curve. The 5 control points are placed at fixed input positions 0.0,
+    0.25, 0.5, 0.75, 1.0; the function interpolates a smooth, monotonic
+    Catmull-Rom curve between them.
+    """
+    if pts == (0.0, 0.25, 0.5, 0.75, 1.0):
+        return f  # identity
+    x_pts = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float32)
+    y_pts = np.array(pts, dtype=np.float32)
+    sample_x = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+    table = _catmull_rom(x_pts, y_pts, sample_x)
+    table = np.clip(table, 0.0, 1.0).astype(np.float32)
+    idx = np.clip((f * 255.0).astype(np.int32), 0, 255)
+    return table[idx]
+
+
+def _catmull_rom(
+    x_ctrl: np.ndarray,
+    y_ctrl: np.ndarray,
+    x_eval: np.ndarray,
+) -> np.ndarray:
+    """Sample a monotonic Catmull-Rom spline at x_eval given control points.
+
+    Uniform-parameterised Catmull-Rom; the tangent at each control point is
+    half the slope between its neighbours. Endpoints clamp their tangent to
+    the adjacent secant. Guaranteed monotonic when consecutive y-values are.
+    """
+    n = len(x_ctrl)
+    out = np.empty_like(x_eval)
+    for j, xe in enumerate(x_eval):
+        i = int(np.clip(np.searchsorted(x_ctrl, xe) - 1, 0, n - 2))
+        x0, x1 = float(x_ctrl[i]), float(x_ctrl[i + 1])
+        y0, y1 = float(y_ctrl[i]), float(y_ctrl[i + 1])
+        h = x1 - x0 if (x1 - x0) > 1e-9 else 1e-9
+        t = (xe - x0) / h
+        if i > 0:
+            m0 = 0.5 * (y_ctrl[i + 1] - y_ctrl[i - 1]) * (h / (x_ctrl[i + 1] - x_ctrl[i - 1]))
+        else:
+            m0 = (y1 - y0)
+        if i < n - 2:
+            m1 = 0.5 * (y_ctrl[i + 2] - y_ctrl[i]) * (h / (x_ctrl[i + 2] - x_ctrl[i]))
+        else:
+            m1 = (y1 - y0)
+        h00 = 2 * t**3 - 3 * t**2 + 1
+        h10 = t**3 - 2 * t**2 + t
+        h01 = -2 * t**3 + 3 * t**2
+        h11 = t**3 - t**2
+        out[j] = h00 * y0 + h10 * m0 + h01 * y1 + h11 * m1
+    return out
+
+
 def _saturation(f: np.ndarray, amount: float) -> np.ndarray:
     if abs(amount) < 1e-4:
         return f
