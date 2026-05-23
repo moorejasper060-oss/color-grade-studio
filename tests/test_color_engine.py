@@ -368,3 +368,31 @@ def test_tone_curve_is_monotonic_when_control_points_are():
         # Allow tiny numerical noise from the 256-entry quantisation.
         assert (diffs > -1e-3).all(), \
             f"non-monotonic output for pts={pts}: min diff = {diffs.min()}"
+
+
+def test_three_way_hsl_identity_is_noop():
+    """All-default per-zone HSL produces no change."""
+    from color_grade_studio.core.color_engine import _three_way_hsl
+    rng = np.random.default_rng(2)
+    img = rng.random((16, 24, 3), dtype=np.float32)
+    out = _three_way_hsl(img, (0.0, 1.0, 1.0), (0.0, 1.0, 1.0), (0.0, 1.0, 1.0))
+    np.testing.assert_allclose(out, img, atol=2e-3)
+
+
+def test_three_way_hsl_shadows_only_affects_dark_pixels():
+    """A shadow saturation crush should mostly affect dark pixels."""
+    from color_grade_studio.core.color_engine import _three_way_hsl
+    # Build a frame with a dark warm patch (top half) and bright warm patch (bottom).
+    # V=max(BGR), so the "dark" patch needs values low enough to land in the
+    # shadow zone (mask peak at V=0.15).
+    dark = np.full((8, 16, 3), [0.06, 0.10, 0.18], dtype=np.float32)   # BGR, V=0.18
+    bright = np.full((8, 16, 3), [0.7, 0.8, 0.9], dtype=np.float32)    # V=0.9
+    img = np.concatenate([dark, bright], axis=0)
+    out = _three_way_hsl(img,
+                         shadows=(0.0, 0.0, 1.0),  # zero shadow saturation
+                         midtones=(0.0, 1.0, 1.0),
+                         highlights=(0.0, 1.0, 1.0))
+    # Top half (dark) should be much closer to gray than the bottom half.
+    top_chroma = float(out[:8].max(axis=-1).mean() - out[:8].min(axis=-1).mean())
+    bot_chroma = float(out[8:].max(axis=-1).mean() - out[8:].min(axis=-1).mean())
+    assert top_chroma < bot_chroma * 0.6

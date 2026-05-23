@@ -347,6 +347,61 @@ def _tone_curve(
     return table[idx]
 
 
+def _three_way_hsl(
+    f: np.ndarray,
+    shadows: Tuple[float, float, float],
+    midtones: Tuple[float, float, float],
+    highlights: Tuple[float, float, float],
+) -> np.ndarray:
+    """Independent HSL (hue_shift_deg, sat_mult, lum_mult) for each zone.
+
+    Zone masks are smooth sigmoid-style windows over luminance:
+      shadows:    weight peaks near L=0.15, falls off by L=0.45
+      midtones:   weight peaks near L=0.50, falls off at both ends
+      highlights: weight peaks near L=0.85, falls off below L=0.55
+
+    A pixel's contribution from each zone is its mask weight; the per-zone
+    HSL shifts are blended additively (for hue/sat in HSV space) then
+    re-composited.
+    """
+    if (shadows == (0.0, 1.0, 1.0)
+            and midtones == (0.0, 1.0, 1.0)
+            and highlights == (0.0, 1.0, 1.0)):
+        return f
+
+    bgr = np.clip(f, 0.0, 1.0).astype(np.float32)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h_ch = hsv[..., 0]  # 0..360
+    s_ch = hsv[..., 1]  # 0..1
+    v_ch = hsv[..., 2]  # 0..1 - proxy for luminance, fine for our masks
+
+    # Smooth zone masks summing to ~1 everywhere.
+    w_shadow = np.exp(-((v_ch - 0.15) ** 2) / 0.045)
+    w_mid = np.exp(-((v_ch - 0.50) ** 2) / 0.075)
+    w_high = np.exp(-((v_ch - 0.85) ** 2) / 0.045)
+    w_total = w_shadow + w_mid + w_high + 1e-6
+    w_shadow /= w_total
+    w_mid /= w_total
+    w_high /= w_total
+
+    hue_shift = (
+        w_shadow * shadows[0] + w_mid * midtones[0] + w_high * highlights[0]
+    )
+    sat_mult = (
+        w_shadow * shadows[1] + w_mid * midtones[1] + w_high * highlights[1]
+    )
+    lum_mult = (
+        w_shadow * shadows[2] + w_mid * midtones[2] + w_high * highlights[2]
+    )
+
+    h_out = (h_ch + hue_shift) % 360.0
+    s_out = np.clip(s_ch * sat_mult, 0.0, 1.0)
+    v_out = np.clip(v_ch * lum_mult, 0.0, 1.0)
+
+    hsv_out = np.stack([h_out, s_out, v_out], axis=-1).astype(np.float32)
+    return cv2.cvtColor(hsv_out, cv2.COLOR_HSV2BGR)
+
+
 def _saturation(f: np.ndarray, amount: float) -> np.ndarray:
     if abs(amount) < 1e-4:
         return f
