@@ -92,12 +92,14 @@ def apply_grade(frame_bgr: np.ndarray, params: GradeParams) -> np.ndarray:
     """Apply a full grade to a BGR uint8 frame and return a new BGR uint8 frame.
 
     The transform pipeline is deliberately fixed:
-        exposure -> white balance -> lift/gamma/gain -> contrast ->
-        saturation -> hue shift -> fade -> vignette
+        exposure -> white_balance -> tone_curve -> lift_gamma_gain ->
+        contrast -> three_way_hsl -> luma_sat -> saturation -> hue_shift
+        -> halation -> fade -> vignette
 
-    Order matters: exposure first so later steps see a normalised brightness;
-    contrast after L/G/G so the s-curve sits on the toned image; saturation
-    after color shifts so the punch reflects the new palette.
+    Order matters: tone curve runs before LGG so LGG operates on the toned
+    image; three_way_hsl runs after contrast so the zone masks see a stable
+    distribution; halation runs late so the bloom uses the final highlight
+    values.
     """
     if frame_bgr.dtype != np.uint8:
         raise TypeError(f"expected uint8 BGR frame, got {frame_bgr.dtype}")
