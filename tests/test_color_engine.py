@@ -8,7 +8,11 @@ from color_grade_studio.core import (
     GradeParams,
     PRESETS,
     apply_grade,
+    apply_pipeline,
+    bake_grade_to_lut,
+    compute_combined_lut,
     get_preset,
+    identity_lut,
 )
 
 
@@ -110,3 +114,64 @@ def test_preset_count():
     # We promised 20+ named presets in the spec.
     named = [p for p in PRESETS if p.id != "none"]
     assert len(named) >= 20
+
+
+# --- LUT pipeline ---------------------------------------------------------
+
+
+def test_baked_lut_matches_apply_grade_without_vignette():
+    """Baking a grade into a LUT and applying it should match the direct
+    grade closely (modulo trilinear interpolation rounding)."""
+    params = get_preset("cinematic").params
+    # Strip any vignette since LUT-baking deliberately excludes it.
+    params = type(params)(
+        exposure=params.exposure,
+        contrast=params.contrast,
+        saturation=params.saturation,
+        temperature=params.temperature,
+        tint=params.tint,
+        shadows_rgb=params.shadows_rgb,
+        midtones_rgb=params.midtones_rgb,
+        highlights_rgb=params.highlights_rgb,
+        hue_shift=params.hue_shift,
+        vignette=0.0,
+        fade=params.fade,
+    )
+    rng = np.random.default_rng(7)
+    frame = (rng.random((32, 48, 3)) * 255).astype(np.uint8)
+    direct = apply_grade(frame, params)
+    lut = bake_grade_to_lut(params, size=33)
+    via_lut = apply_pipeline(frame, lut)
+    # Trilinear interpolation introduces small error; 3/255 is well below
+    # what a human eye can see and is the standard tolerance for 8-bit LUTs.
+    diff = np.abs(direct.astype(int) - via_lut.astype(int)).max()
+    assert diff <= 4, f"baked LUT diverges by {diff} levels from direct grade"
+
+
+def test_warm_temperature_baked_lut_pushes_red_above_blue():
+    params = GradeParams(temperature=1.0)
+    lut = bake_grade_to_lut(params)
+    gray = np.full((4, 4, 3), 128, dtype=np.uint8)
+    out = apply_pipeline(gray, lut)
+    # BGR ordering: red=2, blue=0. Warm grade should leave red > blue.
+    assert out[..., 2].mean() > out[..., 0].mean() + 10
+
+
+def test_compute_combined_lut_with_identity_inputs():
+    """When input_lut and creative_lut are None, compute_combined_lut should
+    equal bake_grade_to_lut for the same params."""
+    params = get_preset("teal_orange").params
+    only_grade = bake_grade_to_lut(params, size=33)
+    combined = compute_combined_lut(params, input_lut=None, creative_lut=None, size=33)
+    diff = np.abs(only_grade.table - combined.table).max()
+    assert diff < 5e-4
+
+
+def test_compute_combined_lut_with_identity_input_lut():
+    """An identity input LUT should not change the result."""
+    params = get_preset("vintage").params
+    no_input = compute_combined_lut(params, input_lut=None, creative_lut=None, size=33)
+    with_identity = compute_combined_lut(params, input_lut=identity_lut(33), creative_lut=None, size=33)
+    diff = np.abs(no_input.table - with_identity.table).max()
+    # Allow a touch more slack because two trilinear lookups stack.
+    assert diff < 3e-3

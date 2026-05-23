@@ -26,14 +26,19 @@ from ..core import (
     SUPPORTED_EXTENSIONS,
     ExportJob,
     GradeParams,
+    Lut3D,
     VideoSource,
-    apply_grade,
+    apply_pipeline,
+    compute_combined_lut,
     downscale_to_preview,
     export_photo,
     find_ffmpeg,
     get_preset,
+    parse_cube,
     probe_audio_streams,
 )
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QUrl
 from .adjustments_panel import AdjustmentsPanel
 from .export_dialog import (
     ExportDialog,
@@ -64,6 +69,15 @@ class MainWindow(QMainWindow):
         self._current_grade: GradeParams = GradeParams()
         self._playing = False
         self._has_audio = False
+        # User-loaded LUTs. input_lut is the log->Rec709 conversion (e.g. the
+        # official DJI D-Log M LUT); creative_lut is the look on top.
+        self._input_lut: Optional[Lut3D] = None
+        self._input_lut_path: Optional[Path] = None
+        self._creative_lut: Optional[Lut3D] = None
+        self._creative_lut_path: Optional[Path] = None
+        # The combined LUT is rebuilt whenever params/LUTs change and applied
+        # to every preview frame. None until we have a video loaded.
+        self._combined_lut: Optional[Lut3D] = None
         # Drop a tick when the previous render hasn't finished — keeps the
         # event loop responsive on heavy frames instead of letting the timer
         # queue back up.
@@ -154,6 +168,39 @@ class MainWindow(QMainWindow):
         act_quit.setShortcut(QKeySequence.StandardKey.Quit)
         act_quit.triggered.connect(self.close)
         m_file.addAction(act_quit)
+
+        # --- LUT menu -------------------------------------------------
+        m_lut = self.menuBar().addMenu("&LUT")
+
+        act_load_input = QAction("Load &input LUT (log → Rec.709)…", self)
+        act_load_input.setShortcut("Ctrl+L")
+        act_load_input.triggered.connect(self._on_load_input_lut)
+        m_lut.addAction(act_load_input)
+
+        act_load_creative = QAction("Load &creative LUT…", self)
+        act_load_creative.setShortcut("Ctrl+Shift+L")
+        act_load_creative.triggered.connect(self._on_load_creative_lut)
+        m_lut.addAction(act_load_creative)
+
+        m_lut.addSeparator()
+
+        self._act_clear_input = QAction("Clear input LUT", self)
+        self._act_clear_input.triggered.connect(self._on_clear_input_lut)
+        self._act_clear_input.setEnabled(False)
+        m_lut.addAction(self._act_clear_input)
+
+        self._act_clear_creative = QAction("Clear creative LUT", self)
+        self._act_clear_creative.triggered.connect(self._on_clear_creative_lut)
+        self._act_clear_creative.setEnabled(False)
+        m_lut.addAction(self._act_clear_creative)
+
+        m_lut.addSeparator()
+        act_dji = QAction("Download official DJI LUTs…", self)
+        act_dji.setToolTip("Open DJI's download page in your browser")
+        act_dji.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://www.dji.com/lut"))
+        )
+        m_lut.addAction(act_dji)
 
         m_help = self.menuBar().addMenu("&Help")
         act_about = QAction("&About Color Grade Studio", self)
@@ -252,9 +299,28 @@ class MainWindow(QMainWindow):
             if raw is None:
                 return
             self._raw_preview_frame = downscale_to_preview(raw, PREVIEW_MAX_WIDTH)
-        graded = apply_grade(self._raw_preview_frame, self._current_grade)
+        if self._combined_lut is None:
+            self._rebuild_combined_lut()
+        graded = apply_pipeline(
+            self._raw_preview_frame,
+            self._combined_lut,
+            vignette=self._current_grade.vignette,
+        )
         self.preview.set_frames(graded, self._raw_preview_frame)
         self._update_position_label()
+
+    def _rebuild_combined_lut(self) -> None:
+        """Recompose input_lut → creative_lut → grade_params into one LUT.
+
+        Cheap (a 33³ identity grid + one apply_grade pass — under 20 ms).
+        Called whenever any input changes so subsequent frame renders are
+        just a single LUT lookup.
+        """
+        self._combined_lut = compute_combined_lut(
+            self._current_grade,
+            input_lut=self._input_lut,
+            creative_lut=self._creative_lut,
+        )
 
     def _update_position_label(self) -> None:
         if self._source is None:
@@ -269,12 +335,14 @@ class MainWindow(QMainWindow):
         preset_params = get_preset(preset_id).params
         manual = self.adjustments.params()
         self._current_grade = preset_params.combine(manual)
+        self._rebuild_combined_lut()
         self._refresh_frame()
 
     def _on_adjustments_changed(self, _manual: GradeParams) -> None:
         preset_params = get_preset(self.preset_panel.selected_id()).params
         manual = self.adjustments.params()
         self._current_grade = preset_params.combine(manual)
+        self._rebuild_combined_lut()
         self._refresh_frame()
 
     # ---------- Timeline / transport --------------------------------
@@ -336,7 +404,13 @@ class MainWindow(QMainWindow):
                 self.timeline.set_playhead(state.in_frame)
                 return
             self._raw_preview_frame = downscale_to_preview(frame, PREVIEW_MAX_WIDTH)
-            graded = apply_grade(self._raw_preview_frame, self._current_grade)
+            if self._combined_lut is None:
+                self._rebuild_combined_lut()
+            graded = apply_pipeline(
+                self._raw_preview_frame,
+                self._combined_lut,
+                vignette=self._current_grade.vignette,
+            )
             self.preview.set_frames(graded, self._raw_preview_frame)
             self._update_position_label()
         finally:
@@ -381,7 +455,13 @@ class MainWindow(QMainWindow):
             if ok != QMessageBox.StandardButton.Yes:
                 return
 
-        job = ExportJob(src_path, self._current_grade, settings)
+        job = ExportJob(
+            src_path,
+            self._current_grade,
+            settings,
+            input_lut=self._input_lut,
+            creative_lut=self._creative_lut,
+        )
         total = (out_f - in_f + 1) if out_f is not None else self._source.meta.frame_count
 
         progress = ExportProgressDialog(total, self)
@@ -465,6 +545,8 @@ class MainWindow(QMainWindow):
                 self.timeline.state.playhead,
                 self._current_grade,
                 out_path,
+                input_lut=self._input_lut,
+                creative_lut=self._creative_lut,
                 source=self._source,
             )
         except Exception as exc:
@@ -476,6 +558,95 @@ class MainWindow(QMainWindow):
             if self._source is not None:
                 self._source.seek_to(self.timeline.state.playhead)
         QMessageBox.information(self, "Photo saved", f"Saved to:\n{out}")
+
+    # ---------- LUT loading -----------------------------------------
+
+    def _on_load_input_lut(self) -> None:
+        self._pick_and_load_lut(slot="input")
+
+    def _on_load_creative_lut(self) -> None:
+        self._pick_and_load_lut(slot="creative")
+
+    def _on_clear_input_lut(self) -> None:
+        self._input_lut = None
+        self._input_lut_path = None
+        self._act_clear_input.setEnabled(False)
+        self._on_luts_changed()
+
+    def _on_clear_creative_lut(self) -> None:
+        self._creative_lut = None
+        self._creative_lut_path = None
+        self._act_clear_creative.setEnabled(False)
+        self._on_luts_changed()
+
+    def _pick_and_load_lut(self, slot: str) -> None:
+        title = "Load input LUT (log → Rec.709)" if slot == "input" else "Load creative LUT"
+        path, _ = QFileDialog.getOpenFileName(
+            self, title, "",
+            "3D LUT (*.cube);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            lut = parse_cube(Path(path))
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not load LUT",
+                                 f"Failed to parse the LUT file:\n{exc}")
+            return
+        if slot == "input":
+            self._input_lut = lut
+            self._input_lut_path = Path(path)
+            self._act_clear_input.setEnabled(True)
+        else:
+            self._creative_lut = lut
+            self._creative_lut_path = Path(path)
+            self._act_clear_creative.setEnabled(True)
+        self._on_luts_changed()
+
+    def _on_luts_changed(self) -> None:
+        """One LUT slot changed — rebuild the combined LUT and re-render."""
+        self._rebuild_combined_lut()
+        # Refresh thumbnails too: the LUT changes the look of every preset.
+        if self._source is not None:
+            thumb_idx = max(0, self._source.meta.frame_count // 4)
+            thumb_frame = self._source.read_frame(thumb_idx)
+            if thumb_frame is not None:
+                # Bake just-the-LUTs (no preset) into a frame transformer for
+                # the thumbnail panel — keeps preset thumbs honest.
+                self.preset_panel.update_thumbnails(
+                    self._apply_input_creative_only(thumb_frame)
+                )
+            # Restore cursor.
+            self._source.seek_to(self.timeline.state.playhead)
+        self._update_lut_status()
+        self._refresh_frame(force_read=True)
+
+    def _apply_input_creative_only(self, frame_bgr):
+        """Apply only the input + creative LUTs to a frame (no preset/manual).
+
+        Used to colour the preset thumbnails so the user sees how each preset
+        looks AFTER their log->Rec709 LUT has been applied.
+        """
+        if self._input_lut is None and self._creative_lut is None:
+            return frame_bgr
+        only_luts = compute_combined_lut(
+            GradeParams(),  # neutral params
+            input_lut=self._input_lut,
+            creative_lut=self._creative_lut,
+        )
+        return apply_pipeline(frame_bgr, only_luts)
+
+    def _update_lut_status(self) -> None:
+        bits = []
+        if self._input_lut_path is not None:
+            bits.append(f"input: {self._input_lut_path.name}")
+        if self._creative_lut_path is not None:
+            bits.append(f"creative: {self._creative_lut_path.name}")
+        if not bits:
+            self.statusBar().clearMessage()
+            self.statusBar().showMessage("No LUTs loaded — use LUT menu to add one")
+        else:
+            self.statusBar().showMessage(" · ".join(["LUT"] + bits))
 
     # ---------- Keyboard --------------------------------------------
 

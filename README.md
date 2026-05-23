@@ -13,23 +13,47 @@ Built with Python · PySide6 · OpenCV · FFmpeg.
 
 ## Features
 
+- **3D LUT pipeline** — load any `.cube` LUT as either an **input LUT**
+  (e.g. DJI D-Log M → Rec.709) or a **creative LUT** (your look). LUTs +
+  presets + sliders are baked into one combined LUT per render, so preview
+  and export match pixel-for-pixel.
+- **10-bit-aware export** — 10-bit sources (D-Log M, S-Log3, V-Log, etc.)
+  stay 10-bit through the encoder (`yuv420p10le`, x264 High 10 profile).
+  No banding from 8-bit roundtrips. The LUT itself is applied at 16-bit
+  precision via ffmpeg's `lut3d` filter.
 - **20 built-in color grade presets** (plus an "Original" pass-through) —
   Cinematic, Teal & Orange, Vintage, Bleach Bypass, Day for Night,
   Cross Process, Anamorphic, Sepia, B&W, B&W High Contrast, Warm, Cool,
   Vibrant, Punch, Golden Hour, Sunset, Clean & Crisp, Pastel, Moody,
   Faded Film.
-- **Live preview** — see the grade applied to your clip in real time.
+- **Live preview** — the grade is applied in real time via the combined LUT.
 - **Manual adjustments** — exposure, contrast, saturation, temperature, tint.
-- **Before/after compare** — hold the `B` key (or click the toggle) to peek at
-  the original.
+- **Before/after compare** — hold the `B` key (or click the toggle) to peek
+  at the original.
 - **Trim** — drag two handles on the timeline to set in/out points.
 - **Export video** — H.264 MP4 with audio preserved, quality presets from
   visually-lossless to small-file.
-- **Export photo** — save the current frame as JPG or PNG with the grade baked
-  in.
+- **Export photo** — save the current frame as JPG or PNG.
 - **Drag & drop** support for opening videos.
-- **Bundles FFmpeg** — the Windows distribution ships with its own FFmpeg, so
-  it works out of the box.
+- **Bundles FFmpeg** — the Windows distribution ships with its own FFmpeg
+  + ffprobe, so it works out of the box.
+
+## Log-footage workflow (D-Log M, S-Log, etc.)
+
+Log footage looks flat by design — that's how it preserves dynamic range.
+The right order is **convert log → Rec.709 first, then grade**. Without
+the conversion LUT, my sliders and presets are working on ungraded log
+pixels, which can't look right.
+
+1. Download the **official input LUT for your camera** (see *LUT → Download
+   official DJI LUTs…* in the app menu, or
+   <https://www.dji.com/lut>). Each camera/profile pair has its own LUT —
+   for example *Mavic 3 D-Log M to Rec.709*.
+2. In the app, choose **LUT → Load input LUT (log → Rec.709)…** and pick
+   the `.cube` file. The status bar shows it's active.
+3. Pick a preset or load a **creative LUT** on top via **LUT → Load creative
+   LUT…**. They stack: input LUT → creative LUT → preset → manual sliders.
+4. Export. If the source is 10-bit, the exported clip is 10-bit too.
 
 ## Supported formats
 
@@ -123,6 +147,8 @@ slider combination is unit-tested against a synthetic test frame.
 | Key                 | Action                          |
 |---------------------|---------------------------------|
 | `Ctrl+O`            | Open a video                    |
+| `Ctrl+L`            | Load input LUT (log → Rec.709)  |
+| `Ctrl+Shift+L`      | Load creative LUT               |
 | `Ctrl+E`            | Export video                    |
 | `Ctrl+Shift+E`      | Save current frame as photo     |
 | `Space`             | Play / pause                    |

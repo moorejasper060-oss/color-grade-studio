@@ -12,10 +12,12 @@ Parameter convention:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+
+from .lut import Lut3D, apply_lut, compose, identity_lut
 
 
 RGB = Tuple[float, float, float]
@@ -82,7 +84,23 @@ def apply_grade(frame_bgr: np.ndarray, params: GradeParams) -> np.ndarray:
         raise ValueError(f"expected HxWx3 frame, got shape {frame_bgr.shape}")
 
     f = frame_bgr.astype(np.float32) / 255.0
+    f = _grade_float_bgr(f, params, include_vignette=True)
+    return (f * 255.0 + 0.5).astype(np.uint8)
 
+
+def _grade_float_bgr(
+    frame_bgr_float: np.ndarray,
+    params: GradeParams,
+    *,
+    include_vignette: bool = True,
+) -> np.ndarray:
+    """The core grade pipeline operating on float32 BGR in [0, 1].
+
+    Vignette is position-dependent and cannot be expressed as a 3D LUT, so
+    LUT-baking calls this with ``include_vignette=False`` and applies the
+    vignette as a separate post-LUT step on the actual frame.
+    """
+    f = frame_bgr_float
     f = _exposure(f, params.exposure)
     f = _white_balance(f, params.temperature, params.tint)
     f = _lift_gamma_gain(
@@ -97,11 +115,74 @@ def apply_grade(frame_bgr: np.ndarray, params: GradeParams) -> np.ndarray:
         f = _hue_shift(f, params.hue_shift)
     if params.fade > 1e-4:
         f = _fade(f, params.fade)
-    if params.vignette > 1e-4:
+    if include_vignette and params.vignette > 1e-4:
         f = _vignette(f, params.vignette)
+    return np.clip(f, 0.0, 1.0)
 
-    f = np.clip(f, 0.0, 1.0)
-    return (f * 255.0 + 0.5).astype(np.uint8)
+
+def bake_grade_to_lut(params: GradeParams, size: int = 33) -> Lut3D:
+    """Bake the color-only portion of a grade into a 3D LUT.
+
+    Vignette is excluded because it depends on pixel position, not color.
+    """
+    ident = identity_lut(size)
+    rgb_samples = ident.table.reshape(-1, 3)  # (N, 3) in RGB order
+    bgr_samples = rgb_samples[:, ::-1].copy().reshape(-1, 1, 3)  # to BGR
+    graded_bgr = _grade_float_bgr(bgr_samples, params, include_vignette=False)
+    graded_rgb = graded_bgr.reshape(-1, 3)[:, ::-1].copy()
+    table = graded_rgb.reshape(size, size, size, 3).astype(np.float32)
+    return Lut3D(size=size, table=table, title="grade")
+
+
+def compute_combined_lut(
+    params: GradeParams,
+    input_lut: Optional[Lut3D] = None,
+    creative_lut: Optional[Lut3D] = None,
+    size: int = 33,
+) -> Lut3D:
+    """Build one LUT that = input_lut ∘ creative_lut ∘ grade_params.
+
+    The result can be applied to a frame to produce the same output as
+    walking through each step in turn — but in a single trilinear lookup.
+    This keeps preview and export pixel-perfect identical: preview calls
+    :func:`apply_pipeline`, export writes the LUT to .cube and lets ffmpeg
+    apply it via the ``lut3d`` filter.
+    """
+    work = identity_lut(size)
+    if input_lut is not None:
+        work = compose(work, input_lut, size=size)
+    if creative_lut is not None:
+        work = compose(work, creative_lut, size=size)
+    # Now bake the programmatic grade on top.
+    rgb_samples = work.table.reshape(-1, 3)
+    bgr_samples = rgb_samples[:, ::-1].copy().reshape(-1, 1, 3)
+    graded_bgr = _grade_float_bgr(bgr_samples, params, include_vignette=False)
+    graded_rgb = graded_bgr.reshape(-1, 3)[:, ::-1].copy()
+    return Lut3D(
+        size=size,
+        table=graded_rgb.reshape(size, size, size, 3).astype(np.float32),
+        title="combined",
+    )
+
+
+def apply_pipeline(
+    frame_bgr: np.ndarray,
+    combined_lut: Lut3D,
+    vignette: float = 0.0,
+) -> np.ndarray:
+    """Apply a pre-computed combined LUT (+ optional vignette) to a BGR uint8 frame."""
+    if frame_bgr.dtype != np.uint8:
+        raise TypeError(f"expected uint8 BGR frame, got {frame_bgr.dtype}")
+    if frame_bgr.ndim != 3 or frame_bgr.shape[2] != 3:
+        raise ValueError(f"expected HxWx3 frame, got shape {frame_bgr.shape}")
+    f = frame_bgr.astype(np.float32) / 255.0
+    rgb = f[..., ::-1]  # BGR -> RGB for LUT lookup
+    rgb_out = apply_lut(rgb, combined_lut)
+    bgr_out = rgb_out[..., ::-1]
+    if vignette > 1e-4:
+        bgr_out = _vignette(bgr_out, vignette)
+    bgr_out = np.clip(bgr_out, 0.0, 1.0)
+    return (bgr_out * 255.0 + 0.5).astype(np.uint8)
 
 
 def _exposure(f: np.ndarray, ev: float) -> np.ndarray:
