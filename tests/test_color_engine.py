@@ -14,7 +14,7 @@ from color_grade_studio.core import (
     get_preset,
     identity_lut,
 )
-from color_grade_studio.core.color_engine import _tone_curve
+from color_grade_studio.core.color_engine import _luma_sat, _tone_curve
 
 
 def _gradient_frame(h: int = 64, w: int = 96) -> np.ndarray:
@@ -395,4 +395,23 @@ def test_three_way_hsl_shadows_only_affects_dark_pixels():
     # Top half (dark) should be much closer to gray than the bottom half.
     top_chroma = float(out[:8].max(axis=-1).mean() - out[:8].min(axis=-1).mean())
     bot_chroma = float(out[8:].max(axis=-1).mean() - out[8:].min(axis=-1).mean())
+    assert top_chroma < bot_chroma * 0.6
+
+
+def test_luma_sat_identity_is_noop():
+    rng = np.random.default_rng(3)
+    img = rng.random((12, 12, 3), dtype=np.float32)
+    out = _luma_sat(img, (1.0, 1.0, 1.0))
+    np.testing.assert_allclose(out, img, atol=2e-3)
+
+
+def test_luma_sat_crushes_shadow_saturation():
+    """Zero shadow sat should desaturate dark pixels but leave bright ones."""
+    # NOTE: BGR=(0.06, 0.10, 0.18) is genuinely dark (V=0.18, in shadow zone).
+    dark = np.full((4, 8, 3), [0.06, 0.10, 0.18], dtype=np.float32)
+    bright = np.full((4, 8, 3), [0.70, 0.80, 0.90], dtype=np.float32)
+    img = np.concatenate([dark, bright], axis=0)
+    out = _luma_sat(img, (0.0, 1.0, 1.0))
+    top_chroma = float(out[:4].max(axis=-1).mean() - out[:4].min(axis=-1).mean())
+    bot_chroma = float(out[4:].max(axis=-1).mean() - out[4:].min(axis=-1).mean())
     assert top_chroma < bot_chroma * 0.6

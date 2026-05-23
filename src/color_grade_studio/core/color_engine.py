@@ -402,6 +402,33 @@ def _three_way_hsl(
     return cv2.cvtColor(hsv_out, cv2.COLOR_HSV2BGR)
 
 
+def _luma_sat(
+    f: np.ndarray,
+    luma_sat: Tuple[float, float, float],
+) -> np.ndarray:
+    """Multiply saturation by a luminance-indexed weight.
+
+    luma_sat = (sat_shadows, sat_mids, sat_highlights). Same smooth Gaussian
+    zone masks as :func:`_three_way_hsl` blend the transitions.
+    """
+    if luma_sat == (1.0, 1.0, 1.0):
+        return f
+
+    bgr = np.clip(f, 0.0, 1.0).astype(np.float32)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    v = hsv[..., 2]
+
+    w_s = np.exp(-((v - 0.15) ** 2) / 0.045)
+    w_m = np.exp(-((v - 0.50) ** 2) / 0.075)
+    w_h = np.exp(-((v - 0.85) ** 2) / 0.045)
+    w_total = w_s + w_m + w_h + 1e-6
+    sat_mult = (
+        w_s * luma_sat[0] + w_m * luma_sat[1] + w_h * luma_sat[2]
+    ) / w_total
+    hsv[..., 1] = np.clip(hsv[..., 1] * sat_mult, 0.0, 1.0)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
 def _saturation(f: np.ndarray, amount: float) -> np.ndarray:
     if abs(amount) < 1e-4:
         return f
