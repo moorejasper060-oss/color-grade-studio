@@ -111,9 +111,45 @@ def test_preset_lookup_falls_back_to_none():
 
 
 def test_preset_count():
-    # We promised 20+ named presets in the spec.
+    """Exactly 10 named cinematic presets, plus the 'none' pass-through."""
     named = [p for p in PRESETS if p.id != "none"]
-    assert len(named) >= 20
+    assert len(named) == 10
+
+
+def test_preset_ids_are_stable():
+    """Pin the preset IDs so accidental renames don't sneak in."""
+    expected_ids = {
+        "none",
+        "cinematic",
+        "teal_orange",
+        "moody_drama",
+        "bleach_bypass",
+        "golden_hour",
+        "anamorphic_dream",
+        "vintage_print",
+        "day_for_night",
+        "drone_hero",
+        "cinescope",
+    }
+    actual_ids = {p.id for p in PRESETS}
+    assert actual_ids == expected_ids
+
+
+def test_each_preset_is_non_trivial():
+    """Every named preset must move at least one pixel — guards against
+    shipping a preset that does nothing."""
+    from tests._preset_signature import BASELINE, signature
+
+    for preset in PRESETS:
+        if preset.id == "none":
+            continue
+        sig = signature(preset.params)
+        moved = (
+            abs(sig.mean_brightness - BASELINE.mean_brightness) > 1
+            or abs(sig.mean_saturation - BASELINE.mean_saturation) > 1
+            or abs(sig.std_contrast - BASELINE.std_contrast) > 1
+        )
+        assert moved, f"preset {preset.id} produces no visible change"
 
 
 # --- LUT pipeline ---------------------------------------------------------

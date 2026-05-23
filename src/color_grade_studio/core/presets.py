@@ -20,6 +20,7 @@ class Preset:
     name: str
     description: str
     params: GradeParams
+    reference: str = ""  # film reference shown in UI tooltip; "" = none
 
 
 _DEFS: List[Preset] = [
