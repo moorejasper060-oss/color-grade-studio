@@ -13,6 +13,7 @@ The script:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -44,9 +45,22 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def main() -> int:
     args = parse_args()
     ffmpeg, ffprobe = locate_ffmpeg()
+
+    print("Bundling FFmpeg:")
+    print(f"  ffmpeg : {ffmpeg}   sha256={_sha256(ffmpeg)}")
+    if ffprobe:
+        print(f"  ffprobe: {ffprobe}   sha256={_sha256(ffprobe)}")
 
     if args.clean:
         for d in (ROOT / "build", ROOT / "dist"):

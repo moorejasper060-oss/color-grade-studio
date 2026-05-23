@@ -1,24 +1,19 @@
 """Top-level QMainWindow that wires everything together."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Optional
 
-import cv2
 import numpy as np
-from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import (
     QAction,
     QDragEnterEvent,
     QDropEvent,
-    QGuiApplication,
     QKeySequence,
 )
 from PySide6.QtWidgets import (
     QFileDialog,
-    QHBoxLayout,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -69,6 +64,13 @@ class MainWindow(QMainWindow):
         self._current_grade: GradeParams = GradeParams()
         self._playing = False
         self._has_audio = False
+        # Drop a tick when the previous render hasn't finished — keeps the
+        # event loop responsive on heavy frames instead of letting the timer
+        # queue back up.
+        self._render_busy = False
+        # Live export thread/worker, so closeEvent can shut them down cleanly.
+        self._export_thread: Optional[QThread] = None
+        self._export_worker: Optional[ExportWorker] = None
 
         # --- Widgets ------------------------------------------------
         self.preset_panel = PresetPanel()
@@ -118,6 +120,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(self._initial_status())
 
         # --- Playback timer -----------------------------------------
+        # Sequential reads happen via VideoSource.read_next() — no per-tick seek.
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._advance_playhead)
 
@@ -165,12 +168,13 @@ class MainWindow(QMainWindow):
             return f"ffmpeg not found — exports will fail · {exc}"
 
     def _show_about(self) -> None:
+        named = len(PRESETS) - 1  # subtract the "Original" pseudo-preset
         QMessageBox.about(
             self, "About Color Grade Studio",
             "<h3>Color Grade Studio</h3>"
             "<p>One-click video color grading for Windows.</p>"
             "<p>Built with PySide6, OpenCV, and FFmpeg.</p>"
-            f"<p>Presets: {len(PRESETS)-1} looks · MIT license</p>",
+            f"<p>{named} grade presets (plus Original) · MIT license</p>",
         )
 
     # ---------- Open / drop -----------------------------------------
@@ -206,10 +210,13 @@ class MainWindow(QMainWindow):
         if self._source is not None:
             self._source.release()
             self._source = None
+        # Forget any frame cached from a previous video before we touch the UI.
+        self._raw_preview_frame = None
         try:
             source = VideoSource(path)
         except Exception as exc:
             QMessageBox.critical(self, "Failed to open", f"{exc}")
+            self.preview.clear()
             return
         self._source = source
         meta = source.meta
@@ -232,6 +239,7 @@ class MainWindow(QMainWindow):
             self.preset_panel.update_thumbnails(thumb_frame)
         # Restore playhead to start.
         self.timeline.set_playhead(0)
+        self._refresh_frame(force_read=True)
 
     # ---------- Frame rendering -------------------------------------
 
@@ -272,10 +280,12 @@ class MainWindow(QMainWindow):
     # ---------- Timeline / transport --------------------------------
 
     def _on_playhead_moved(self, _frame: int) -> None:
+        # User scrubbed — discard any sequential read state and seek.
+        if self._source is not None:
+            self._source.seek_to(self.timeline.state.playhead)
         self._refresh_frame(force_read=True)
 
     def _on_trim_changed(self, _in_f: int, _out_f: int) -> None:
-        # No-op for now; trim only matters on export. Could redraw timeline labels.
         pass
 
     def _on_play_toggled(self, play: bool) -> None:
@@ -288,6 +298,9 @@ class MainWindow(QMainWindow):
         if self._source is None:
             return
         self._playing = True
+        # Seek the underlying capture once at the start; subsequent ticks call
+        # read_next() so we don't trash the decoder with a seek per frame.
+        self._source.seek_to(self.timeline.state.playhead)
         interval = max(int(1000 / max(self._source.meta.fps, 1.0)), 16)
         self._play_timer.start(interval)
 
@@ -300,25 +313,55 @@ class MainWindow(QMainWindow):
         if self._source is None:
             self._stop_playback()
             return
+        if self._render_busy:
+            # Previous tick hasn't finished — skip rather than queue up work.
+            return
         state = self.timeline.state
         next_frame = state.playhead + 1
         if next_frame > state.out_frame:
+            # Loop back to the in-point.
+            self._source.seek_to(state.in_frame)
             next_frame = state.in_frame
-        self.timeline.set_playhead(next_frame)
-        self._refresh_frame(force_read=True)
+        elif next_frame != self._source.next_frame_index:
+            # We drifted out of sync (e.g. after a scrub during pause); resync.
+            self._source.seek_to(next_frame)
+
+        self._render_busy = True
+        try:
+            self.timeline.set_playhead(next_frame)
+            frame = self._source.read_next()
+            if frame is None:
+                # Hit EOF before out_frame — bounce back to the in-point.
+                self._source.seek_to(state.in_frame)
+                self.timeline.set_playhead(state.in_frame)
+                return
+            self._raw_preview_frame = downscale_to_preview(frame, PREVIEW_MAX_WIDTH)
+            graded = apply_grade(self._raw_preview_frame, self._current_grade)
+            self.preview.set_frames(graded, self._raw_preview_frame)
+            self._update_position_label()
+        finally:
+            self._render_busy = False
 
     def _jump_to_in(self) -> None:
         self.timeline.set_playhead(self.timeline.state.in_frame)
+        if self._source is not None:
+            self._source.seek_to(self.timeline.state.in_frame)
         self._refresh_frame(force_read=True)
 
     def _jump_to_out(self) -> None:
         self.timeline.set_playhead(self.timeline.state.out_frame)
+        if self._source is not None:
+            self._source.seek_to(self.timeline.state.out_frame)
         self._refresh_frame(force_read=True)
 
     # ---------- Export video ----------------------------------------
 
     def _on_export_video(self) -> None:
         if self._source is None:
+            return
+        if self._export_thread is not None:
+            QMessageBox.information(self, "Export in progress",
+                                    "An export is already running. Cancel it before starting another.")
             return
         self._stop_playback()
         src_path = self._source.path
@@ -342,15 +385,18 @@ class MainWindow(QMainWindow):
         total = (out_f - in_f + 1) if out_f is not None else self._source.meta.frame_count
 
         progress = ExportProgressDialog(total, self)
-
         worker = ExportWorker(job)
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(progress.setValue)
         progress.canceled.connect(worker.cancel)
-        worker.finished.connect(lambda out: self._on_export_finished(out, progress, thread, worker))
-        worker.failed.connect(lambda msg: self._on_export_failed(msg, progress, thread, worker))
+        worker.finished.connect(
+            lambda out: self._on_export_finished(out, progress, thread, worker))
+        worker.failed.connect(
+            lambda msg: self._on_export_failed(msg, progress, thread, worker))
+        self._export_thread = thread
+        self._export_worker = worker
         thread.start()
         progress.exec()
 
@@ -360,6 +406,9 @@ class MainWindow(QMainWindow):
         thread.quit()
         thread.wait(2000)
         worker.deleteLater()
+        if self._export_thread is thread:
+            self._export_thread = None
+            self._export_worker = None
         QMessageBox.information(
             self, "Export complete",
             f"Saved to:\n{out_path}",
@@ -370,7 +419,15 @@ class MainWindow(QMainWindow):
         thread.quit()
         thread.wait(2000)
         worker.deleteLater()
-        QMessageBox.critical(self, "Export failed", message)
+        if self._export_thread is thread:
+            self._export_thread = None
+            self._export_worker = None
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("Export failed")
+        box.setText("Export failed. Click 'Show details' for the ffmpeg log.")
+        box.setDetailedText(message)
+        box.exec()
 
     # ---------- Export photo ----------------------------------------
 
@@ -379,35 +436,53 @@ class MainWindow(QMainWindow):
             return
         self._stop_playback()
         src_path = self._source.path
-        suggested = src_path.with_name(
-            f"{src_path.stem}_frame{self.timeline.state.playhead}.jpg"
-        )
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save frame as photo", str(suggested),
-            "JPEG (*.jpg);;PNG (*.png)",
-        )
-        if not path:
+        suggested_name = f"{src_path.stem}_frame{self.timeline.state.playhead}.jpg"
+        suggested = src_path.with_name(suggested_name)
+
+        dialog = QFileDialog(self, "Save frame as photo", str(suggested),
+                             "JPEG (*.jpg);;PNG (*.png)")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDefaultSuffix("jpg")
+        if dialog.exec() != QFileDialog.DialogCode.Accepted:
             return
+        files = dialog.selectedFiles()
+        if not files:
+            return
+        out_path = Path(files[0])
+        # Honour the selected filter: if the user picked PNG but the file
+        # name doesn't end in .png, switch the suffix.
+        selected_filter = dialog.selectedNameFilter()
+        if "PNG" in selected_filter and out_path.suffix.lower() != ".png":
+            out_path = out_path.with_suffix(".png")
+        elif "JPEG" in selected_filter and out_path.suffix.lower() not in {".jpg", ".jpeg"}:
+            out_path = out_path.with_suffix(".jpg")
+
         try:
+            # Reuse the already-open VideoSource so we don't pay another
+            # full-decode cycle on a large file.
             out = export_photo(
                 src_path,
                 self.timeline.state.playhead,
                 self._current_grade,
-                Path(path),
+                out_path,
+                source=self._source,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Photo export failed", str(exc))
             return
+        finally:
+            # The shared VideoSource has just had its cursor moved by the
+            # photo read — make the preview state coherent again.
+            if self._source is not None:
+                self._source.seek_to(self.timeline.state.playhead)
         QMessageBox.information(self, "Photo saved", f"Saved to:\n{out}")
 
     # ---------- Keyboard --------------------------------------------
 
     def keyPressEvent(self, event):
-        # Spacebar toggles play/pause.
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.transport.play_btn.toggle()
             return
-        # Hold B to peek at the original.
         if event.key() == Qt.Key.Key_B and not event.isAutoRepeat():
             self.transport.before_btn.setChecked(True)
             return
@@ -423,6 +498,18 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._stop_playback()
+        # If an export is still running, cancel it and wait for the thread to
+        # finish before tearing the window down — otherwise Qt destroys the
+        # QThread mid-encode and the user gets a crash on shutdown.
+        if self._export_worker is not None and self._export_thread is not None:
+            try:
+                self._export_worker.cancel()
+            except Exception:
+                pass
+            self._export_thread.quit()
+            self._export_thread.wait(5000)
+            self._export_worker = None
+            self._export_thread = None
         if self._source is not None:
             self._source.release()
             self._source = None

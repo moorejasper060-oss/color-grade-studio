@@ -9,10 +9,11 @@ Built with Python · PySide6 · OpenCV · FFmpeg.
 
 ## Features
 
-- **20 built-in color grade presets** — Cinematic, Teal & Orange, Vintage,
-  Bleach Bypass, Day for Night, Cross Process, Anamorphic, Sepia, B&W,
-  B&W High Contrast, Warm, Cool, Vibrant, Punch, Golden Hour, Sunset,
-  Clean & Crisp, Pastel, Moody, Faded Film (plus Original).
+- **20 built-in color grade presets** (plus an "Original" pass-through) —
+  Cinematic, Teal & Orange, Vintage, Bleach Bypass, Day for Night,
+  Cross Process, Anamorphic, Sepia, B&W, B&W High Contrast, Warm, Cool,
+  Vibrant, Punch, Golden Hour, Sunset, Clean & Crisp, Pastel, Moody,
+  Faded Film.
 - **Live preview** — see the grade applied to your clip in real time.
 - **Manual adjustments** — exposure, contrast, saturation, temperature, tint.
 - **Before/after compare** — hold the `B` key (or click the toggle) to peek at
@@ -65,6 +66,16 @@ with a bundled FFmpeg. Pass `--onefile` for a single-exe build (slower first
 launch). The whole folder is portable — copy it anywhere and the `.exe`
 will run.
 
+**About the bundled FFmpeg.** `build_exe.py` copies whichever `ffmpeg.exe` and
+`ffprobe.exe` are on the build machine's `PATH` and prints their SHA-256 to
+the build log. Pin to a known release (e.g. the Gyan build via winget) on the
+build host before producing distribution artifacts.
+
+**About SmartScreen.** The shipped `.exe` is **not code-signed**, so Windows
+will show a "Windows protected your PC" warning the first time you run it.
+Click "More info" → "Run anyway". Sign with an EV/OV certificate before
+distributing to other people.
+
 ## Run the tests
 
 ```powershell
@@ -72,8 +83,10 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-End-to-end tests render synthetic FFmpeg clips and verify the export pipeline
-produces playable MP4 output, so FFmpeg must be on `PATH` for those to run.
+End-to-end tests render synthetic FFmpeg clips and verify the export
+pipeline produces playable MP4 output, that cancelled exports clean up
+their partial files, and that a failed ffmpeg run leaves no zero-byte
+junk behind. FFmpeg must be on `PATH` for these to run.
 
 ---
 

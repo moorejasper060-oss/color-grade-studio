@@ -1,11 +1,10 @@
 """Export dialog and progress dialog for background encoding."""
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -15,15 +14,48 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressDialog,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
     QFileDialog,
 )
 
-from ..core import ExportJob, ExportSettings, GradeParams
+from ..core import ExportJob, ExportSettings
+
+
+# Windows reserved device names — opening one of these would hang ffmpeg.
+_WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def sanitize_output_path(raw: str) -> Path:
+    """Normalize a user-typed export path. Raises :class:`ValueError` on bad input.
+
+    Rules:
+      * empty after stripping → reject
+      * contains control characters → reject (filenames with newlines are weird
+        even when subprocess passes them as a single argv element)
+      * basename matches a Windows reserved device name → reject
+      * suffix missing or not .mp4 → force .mp4 (the encoder is hard-wired to
+        H.264/AAC in an mp4 muxer)
+    """
+    text = raw.strip().strip('"').strip("'")
+    if not text:
+        raise ValueError("Please choose a file path.")
+    if any(ord(c) < 32 for c in text):
+        raise ValueError("Path contains invalid control characters.")
+    p = Path(text).expanduser()
+    stem = p.stem.upper()
+    if stem in _WIN_RESERVED:
+        raise ValueError(f'"{p.stem}" is a reserved Windows name. Pick another.')
+    if p.suffix.lower() != ".mp4":
+        p = p.with_suffix(".mp4")
+    return p
 
 
 class ExportDialog(QDialog):
@@ -78,7 +110,7 @@ class ExportDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Export")
         buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
@@ -91,20 +123,31 @@ class ExportDialog(QDialog):
 
     def settings(self) -> ExportSettings:
         return ExportSettings(
-            output_path=Path(self._path_edit.text()).expanduser(),
+            output_path=sanitize_output_path(self._path_edit.text()),
             crf=int(self._quality_combo.currentData()),
             preset=self._preset_combo.currentText(),
             include_audio=self._audio_check.isChecked(),
         )
 
+    def _on_accept(self) -> None:
+        try:
+            path = sanitize_output_path(self._path_edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Check the output path", str(exc))
+            return
+        # Reflect any normalisation back to the user before closing the dialog.
+        self._path_edit.setText(str(path))
+        self.accept()
+
     def _pick_path(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export video",
-            self._path_edit.text(),
-            "MP4 video (*.mp4)",
-        )
-        if path:
-            self._path_edit.setText(path)
+        dialog = QFileDialog(self, "Export video", self._path_edit.text(),
+                             "MP4 video (*.mp4)")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setDefaultSuffix("mp4")
+        if dialog.exec() == QFileDialog.DialogCode.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                self._path_edit.setText(files[0])
 
 
 def _wrap(layout) -> QWidget:

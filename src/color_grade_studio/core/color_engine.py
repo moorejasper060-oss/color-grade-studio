@@ -11,7 +11,7 @@ Parameter convention:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Tuple
 
 import cv2

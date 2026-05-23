@@ -1,18 +1,18 @@
 """Application entry point."""
 from __future__ import annotations
 
-import os
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 
+from .core import SUPPORTED_EXTENSIONS
 from .ui.main_window import MainWindow
 
 
 def main() -> int:
-    # Ask Qt to use the high-DPI image scaling.
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -25,10 +25,12 @@ def main() -> int:
     win = MainWindow()
     win.show()
 
-    # Optionally open a file passed on the CLI.
-    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
-        from pathlib import Path
-        win._load_video(Path(sys.argv[1]))
+    # Optionally open a file passed on the CLI. Apply the same extension
+    # check that drag-drop uses so we don't hand garbage to OpenCV.
+    if len(sys.argv) > 1:
+        candidate = Path(sys.argv[1])
+        if candidate.exists() and candidate.suffix.lower() in SUPPORTED_EXTENSIONS:
+            win._load_video(candidate)
 
     return app.exec()
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -21,8 +21,6 @@ def bgr_to_qimage(frame_bgr: np.ndarray) -> QImage:
 
 class PreviewWidget(QWidget):
     """Holds two QImages (graded + original) and renders the active one to fit."""
-
-    clicked = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -82,7 +80,3 @@ class PreviewWidget(QWidget):
         )
         self._label.setPixmap(pix)
 
-    def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
