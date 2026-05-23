@@ -39,7 +39,10 @@ class PresetPanel(QGroupBox):
         for preset in PRESETS:
             item = QListWidgetItem(preset.name)
             item.setData(Qt.ItemDataRole.UserRole, preset.id)
-            item.setToolTip(preset.description)
+            tooltip = preset.description
+            if preset.reference:
+                tooltip += f"\n\nLook: {preset.reference}"
+            item.setToolTip(tooltip)
             item.setSizeHint(QSize(0, THUMB_H + 14))
             self.list.addItem(item)
         # Default to first preset (Original).
