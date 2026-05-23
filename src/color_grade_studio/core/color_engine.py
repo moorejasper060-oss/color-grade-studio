@@ -429,6 +429,31 @@ def _luma_sat(
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
 
+def _halation(f: np.ndarray, amount: float) -> np.ndarray:
+    """Add a soft red bloom around the brightest pixels (Kodak-like halation).
+
+    amount in [0, 1]. Builds a luminance mask of bright pixels (> 0.65),
+    Gaussian-blurs it, and adds it weighted into the red channel. Other
+    channels get a fraction of the bloom for a warm glow.
+    """
+    amount = float(np.clip(amount, 0.0, 1.0))
+    if amount < 1e-4:
+        return f
+
+    bgr = np.clip(f, 0.0, 1.0).astype(np.float32)
+    # Luminance from BGR (Rec.601 weights for speed; visually fine here).
+    lum = 0.114 * bgr[..., 0] + 0.587 * bgr[..., 1] + 0.299 * bgr[..., 2]
+    mask = np.clip((lum - 0.65) / 0.35, 0.0, 1.0)
+    # Gaussian blur — kernel scales with image; 21x21 works well at HD.
+    blurred = cv2.GaussianBlur(mask, (21, 21), sigmaX=7.0)
+
+    out = bgr.copy()
+    out[..., 2] += blurred * amount * 0.55   # red (strongest)
+    out[..., 1] += blurred * amount * 0.18   # green
+    out[..., 0] += blurred * amount * 0.06   # blue
+    return np.clip(out, 0.0, 1.0)
+
+
 def _saturation(f: np.ndarray, amount: float) -> np.ndarray:
     if abs(amount) < 1e-4:
         return f

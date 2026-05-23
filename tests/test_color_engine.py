@@ -14,7 +14,7 @@ from color_grade_studio.core import (
     get_preset,
     identity_lut,
 )
-from color_grade_studio.core.color_engine import _luma_sat, _tone_curve
+from color_grade_studio.core.color_engine import _halation, _luma_sat, _tone_curve
 
 
 def _gradient_frame(h: int = 64, w: int = 96) -> np.ndarray:
@@ -415,3 +415,22 @@ def test_luma_sat_crushes_shadow_saturation():
     top_chroma = float(out[:4].max(axis=-1).mean() - out[:4].min(axis=-1).mean())
     bot_chroma = float(out[4:].max(axis=-1).mean() - out[4:].min(axis=-1).mean())
     assert top_chroma < bot_chroma * 0.6
+
+
+def test_halation_identity_is_noop():
+    rng = np.random.default_rng(4)
+    img = rng.random((16, 16, 3), dtype=np.float32)
+    out = _halation(img, 0.0)
+    np.testing.assert_allclose(out, img, atol=1e-6)
+
+
+def test_halation_glows_bright_red_into_neighbours():
+    """A bright white spot in the middle should brighten the red channel of nearby pixels."""
+    img = np.zeros((32, 32, 3), dtype=np.float32)
+    img[8:24, 8:24] = 1.0  # 16x16 bright white square
+    out = _halation(img, 0.6)
+    # Pixel adjacent to the bright square — original was 0, now should have red.
+    near_red = out[4, 16, 2]   # 4 rows above the 8-24 square — adjacent
+    near_green = out[4, 16, 1]
+    assert near_red > 0.05
+    assert near_red > near_green, "halation should bloom red preferentially"
