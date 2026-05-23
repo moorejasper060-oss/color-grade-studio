@@ -135,6 +135,95 @@ def test_preset_ids_are_stable():
     assert actual_ids == expected_ids
 
 
+def test_cinematic_signature():
+    """Cinematic: subtle teal shadows + warm highlights."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("cinematic").params)
+    assert sig.mean_r > BASELINE.mean_r + 1, "expected warmer highlights"
+
+
+def test_teal_orange_signature():
+    """Teal & Orange: high saturation, red boosted, blue shadow tint."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("teal_orange").params)
+    assert sig.mean_saturation > BASELINE.mean_saturation + 5, "expected aggressive saturation push"
+    assert sig.mean_r > sig.mean_b, "expected red dominance"
+
+
+def test_moody_drama_signature():
+    """Moody Drama: darker overall with cool shadow tint."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("moody_drama").params)
+    assert sig.mean_brightness < BASELINE.mean_brightness - 3, "expected darker overall"
+    assert sig.mean_b > sig.mean_r, "expected cool (blue > red) cast"
+
+
+def test_bleach_bypass_signature():
+    """Bleach Bypass: desaturated + high contrast."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("bleach_bypass").params)
+    assert sig.mean_saturation < BASELINE.mean_saturation - 5, "expected desaturated"
+    assert sig.std_contrast > BASELINE.std_contrast + 3, "expected hard contrast"
+
+
+def test_golden_hour_signature():
+    """Golden Hour: warm shift (R up, B down)."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("golden_hour").params)
+    assert sig.mean_r > BASELINE.mean_r + 5, "expected strong red push"
+    assert sig.mean_b < BASELINE.mean_b - 1, "expected blue rolled down"
+
+
+def test_anamorphic_dream_signature():
+    """Anamorphic Dream: cool cast (blue > red) + vignette darkens corners."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("anamorphic_dream").params)
+    assert sig.mean_b > sig.mean_r, "expected cool (blue > red) cast"
+    assert sig.mean_brightness < BASELINE.mean_brightness, "expected vignette to darken overall"
+
+
+def test_vintage_print_signature():
+    """Vintage Print: warm cast, faded (low contrast)."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("vintage_print").params)
+    assert sig.mean_r > BASELINE.mean_r + 3, "expected warm cast"
+    assert sig.std_contrast < BASELINE.std_contrast + 1, "expected faded (low) contrast"
+
+
+def test_day_for_night_signature():
+    """Day for Night: significantly darker, blue-dominant."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("day_for_night").params)
+    assert sig.mean_brightness < BASELINE.mean_brightness - 15, "expected dramatically darker"
+    assert sig.mean_b > sig.mean_r, "expected blue dominance"
+
+
+def test_drone_hero_signature():
+    """Drone Hero: saturated and contrasty."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("drone_hero").params)
+    assert sig.mean_saturation > BASELINE.mean_saturation + 8, "expected punchy saturation"
+    assert sig.std_contrast > BASELINE.std_contrast + 1, "expected punch"
+
+
+def test_cinescope_signature():
+    """Cinescope: subtly cool, lifted blacks."""
+    from tests._preset_signature import BASELINE, signature
+
+    sig = signature(get_preset("cinescope").params)
+    assert sig.mean_b > BASELINE.mean_b, "expected slight cool cast"
+    assert sig.mean_brightness > BASELINE.mean_brightness - 3, "expected blacks lifted"
+
+
 def test_each_preset_is_non_trivial():
     """Every named preset must move at least one pixel — guards against
     shipping a preset that does nothing."""
