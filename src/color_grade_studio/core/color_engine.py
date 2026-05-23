@@ -274,38 +274,18 @@ def _contrast(f: np.ndarray, amount: float) -> np.ndarray:
     return flat
 
 
-def _tone_curve(
-    f: np.ndarray,
-    pts: Tuple[float, float, float, float, float],
-) -> np.ndarray:
-    """Apply a 5-point monotonic curve to every channel via a 256-entry LUT.
-
-    Inputs are clamped to [0, 1]; outputs are clamped to [0, 1] after the
-    curve. The 5 control points are placed at fixed input positions 0.0,
-    0.25, 0.5, 0.75, 1.0; the function interpolates a smooth, monotonic
-    Catmull-Rom curve between them.
-    """
-    if pts == (0.0, 0.25, 0.5, 0.75, 1.0):
-        return f  # identity
-    x_pts = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float32)
-    y_pts = np.array(pts, dtype=np.float32)
-    sample_x = np.linspace(0.0, 1.0, 256, dtype=np.float32)
-    table = _catmull_rom(x_pts, y_pts, sample_x)
-    table = np.clip(table, 0.0, 1.0).astype(np.float32)
-    idx = np.clip((f * 255.0).astype(np.int32), 0, 255)
-    return table[idx]
-
-
 def _catmull_rom(
     x_ctrl: np.ndarray,
     y_ctrl: np.ndarray,
     x_eval: np.ndarray,
 ) -> np.ndarray:
-    """Sample a monotonic Catmull-Rom spline at x_eval given control points.
+    """Sample a monotonic cubic spline at x_eval given control points.
 
-    Uniform-parameterised Catmull-Rom; the tangent at each control point is
-    half the slope between its neighbours. Endpoints clamp their tangent to
-    the adjacent secant. Guaranteed monotonic when consecutive y-values are.
+    Fritsch-Carlson PCHIP tangent rule: at each interior point the tangent
+    is the harmonic mean of the adjacent secants, clipped to zero where the
+    secants change sign. This guarantees the interpolated curve is
+    monotonic on every segment where consecutive y-values are monotonic.
+    Endpoints fall back to the adjacent secant.
     """
     n = len(x_ctrl)
     out = np.empty_like(x_eval)
@@ -315,20 +295,56 @@ def _catmull_rom(
         y0, y1 = float(y_ctrl[i]), float(y_ctrl[i + 1])
         h = x1 - x0 if (x1 - x0) > 1e-9 else 1e-9
         t = (xe - x0) / h
-        if i > 0:
-            m0 = 0.5 * (y_ctrl[i + 1] - y_ctrl[i - 1]) * (h / (x_ctrl[i + 1] - x_ctrl[i - 1]))
+        # Fritsch-Carlson PCHIP tangents — preserve monotonicity by clipping
+        # tangent magnitude where adjacent secants change sign or differ a lot.
+        d_curr = (y1 - y0) / h  # secant of current segment, per-unit-x
+        # Endpoint tangents fall back to the adjacent secant.
+        if i == 0:
+            m0 = d_curr
         else:
-            m0 = (y1 - y0)
-        if i < n - 2:
-            m1 = 0.5 * (y_ctrl[i + 2] - y_ctrl[i]) * (h / (x_ctrl[i + 2] - x_ctrl[i]))
+            d_prev = (y_ctrl[i] - y_ctrl[i - 1]) / (x_ctrl[i] - x_ctrl[i - 1])
+            if d_prev * d_curr <= 0:
+                m0 = 0.0  # extremum at the control point
+            else:
+                m0 = 3 * d_prev * d_curr / (2 * d_curr + d_prev)
+        m0 *= h  # rescale to Hermite basis convention (per-segment units)
+        if i == n - 2:
+            m1 = d_curr
         else:
-            m1 = (y1 - y0)
+            d_next = (y_ctrl[i + 2] - y_ctrl[i + 1]) / (x_ctrl[i + 2] - x_ctrl[i + 1])
+            if d_curr * d_next <= 0:
+                m1 = 0.0
+            else:
+                m1 = 3 * d_curr * d_next / (2 * d_next + d_curr)
+        m1 *= h
         h00 = 2 * t**3 - 3 * t**2 + 1
         h10 = t**3 - 2 * t**2 + t
         h01 = -2 * t**3 + 3 * t**2
         h11 = t**3 - t**2
         out[j] = h00 * y0 + h10 * m0 + h01 * y1 + h11 * m1
     return out
+
+
+def _tone_curve(
+    f: np.ndarray,
+    pts: Tuple[float, float, float, float, float],
+) -> np.ndarray:
+    """Apply a 5-point monotonic curve to every channel via a 256-entry LUT.
+
+    Inputs are clamped to [0, 1]; outputs are clamped to [0, 1] after the
+    curve. The 5 control points are placed at fixed input positions 0.0,
+    0.25, 0.5, 0.75, 1.0; the function interpolates a smooth, monotonic
+    PCHIP cubic curve between them.
+    """
+    if pts == (0.0, 0.25, 0.5, 0.75, 1.0):
+        return f  # identity
+    x_pts = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float32)
+    y_pts = np.array(pts, dtype=np.float32)
+    sample_x = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+    table = _catmull_rom(x_pts, y_pts, sample_x)
+    table = np.clip(table, 0.0, 1.0).astype(np.float32)
+    idx = np.clip(np.round(f * 255.0).astype(np.int32), 0, 255)
+    return table[idx]
 
 
 def _saturation(f: np.ndarray, amount: float) -> np.ndarray:

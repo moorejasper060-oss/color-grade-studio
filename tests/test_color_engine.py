@@ -14,6 +14,7 @@ from color_grade_studio.core import (
     get_preset,
     identity_lut,
 )
+from color_grade_studio.core.color_engine import _tone_curve
 
 
 def _gradient_frame(h: int = 64, w: int = 96) -> np.ndarray:
@@ -327,8 +328,6 @@ def test_compute_combined_lut_with_identity_input_lut():
 
 def test_tone_curve_identity_is_noop():
     """Default tone_curve must not change pixels (within rounding)."""
-    from color_grade_studio.core.color_engine import _tone_curve
-    import numpy as np
     rng = np.random.default_rng(1)
     img = rng.random((16, 24, 3), dtype=np.float32)
     out = _tone_curve(img, (0.0, 0.25, 0.5, 0.75, 1.0))
@@ -337,8 +336,6 @@ def test_tone_curve_identity_is_noop():
 
 def test_tone_curve_lifts_midtones():
     """Bumping the mid-output above 0.5 lifts mid-grays."""
-    from color_grade_studio.core.color_engine import _tone_curve
-    import numpy as np
     img = np.full((4, 4, 3), 0.5, dtype=np.float32)
     out = _tone_curve(img, (0.0, 0.25, 0.65, 0.85, 1.0))  # mid 0.5 -> 0.65
     assert out.mean() > 0.6
@@ -346,8 +343,28 @@ def test_tone_curve_lifts_midtones():
 
 def test_tone_curve_crushes_blacks():
     """Lowering low-mid-output crushes shadows."""
-    from color_grade_studio.core.color_engine import _tone_curve
-    import numpy as np
     img = np.full((4, 4, 3), 0.25, dtype=np.float32)
     out = _tone_curve(img, (0.0, 0.10, 0.5, 0.75, 1.0))  # lo_mid 0.25 -> 0.10
     assert out.mean() < 0.20
+
+
+def test_tone_curve_is_monotonic_when_control_points_are():
+    """PCHIP guarantee: monotonic control points -> monotonic output curve.
+
+    Tested against several steep curves that broke the old Catmull-Rom math.
+    """
+    cases = [
+        (0.0, 0.01, 0.5, 0.99, 1.0),    # extreme S
+        (0.0, 0.0, 0.5, 1.0, 1.0),      # plateau ends
+        (0.0, 0.49, 0.5, 0.51, 1.0),    # near-flat middle
+        (0.0, 0.10, 0.50, 0.90, 1.0),   # mild S
+        (0.0, 0.05, 0.45, 0.85, 0.99),  # heavy lift + shoulder
+    ]
+    ramp = np.linspace(0.0, 1.0, 256, dtype=np.float32).reshape(1, 256, 1)
+    ramp = np.repeat(ramp, 3, axis=2)
+    for pts in cases:
+        out = _tone_curve(ramp, pts)
+        diffs = np.diff(out[0, :, 0])
+        # Allow tiny numerical noise from the 256-entry quantisation.
+        assert (diffs > -1e-3).all(), \
+            f"non-monotonic output for pts={pts}: min diff = {diffs.min()}"
