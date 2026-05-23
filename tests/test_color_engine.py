@@ -97,6 +97,29 @@ def test_combine_stacks_preset_and_manual():
     assert combined.saturation == pytest.approx(-0.5)
 
 
+def test_grade_params_accepts_new_fields():
+    """Engine v2: GradeParams must accept new fields, all with no-op defaults."""
+    p = GradeParams(
+        shadows_hsl=(10.0, 1.2, 0.95),
+        midtones_hsl=(0.0, 1.0, 1.0),
+        highlights_hsl=(-8.0, 1.1, 1.03),
+        tone_curve=(0.04, 0.20, 0.52, 0.78, 0.98),
+        luma_sat=(0.85, 1.18, 1.05),
+        halation=0.25,
+    )
+    assert p.shadows_hsl == (10.0, 1.2, 0.95)
+    assert p.highlights_hsl[0] == -8.0
+    assert p.halation == 0.25
+    # Defaults are no-op:
+    d = GradeParams()
+    assert d.shadows_hsl == (0.0, 1.0, 1.0)
+    assert d.midtones_hsl == (0.0, 1.0, 1.0)
+    assert d.highlights_hsl == (0.0, 1.0, 1.0)
+    assert d.tone_curve == (0.0, 0.25, 0.5, 0.75, 1.0)
+    assert d.luma_sat == (1.0, 1.0, 1.0)
+    assert d.halation == 0.0
+
+
 def test_all_presets_run_without_error():
     frame = _gradient_frame()
     for preset in PRESETS:

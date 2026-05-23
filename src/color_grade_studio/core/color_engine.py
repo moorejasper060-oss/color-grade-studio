@@ -42,6 +42,18 @@ class GradeParams:
     vignette: float = 0.0
     fade: float = 0.0
 
+    # --- Engine v2 fields (additive; defaults are no-ops) -----------
+    # Per-zone HSL: (hue_shift_deg, sat_mult, lum_mult).
+    shadows_hsl: Tuple[float, float, float] = (0.0, 1.0, 1.0)
+    midtones_hsl: Tuple[float, float, float] = (0.0, 1.0, 1.0)
+    highlights_hsl: Tuple[float, float, float] = (0.0, 1.0, 1.0)
+    # 5-point tone curve outputs at fixed inputs (0.0, 0.25, 0.5, 0.75, 1.0).
+    tone_curve: Tuple[float, float, float, float, float] = (0.0, 0.25, 0.5, 0.75, 1.0)
+    # Saturation multiplier per luminance zone: (shadows, mids, highlights).
+    luma_sat: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    # Red halation bloom strength (0..1).
+    halation: float = 0.0
+
     def combine(self, manual: "GradeParams") -> "GradeParams":
         """Stack a manual adjustment on top of this (preset) baseline."""
         return GradeParams(
@@ -56,6 +68,12 @@ class GradeParams:
             hue_shift=self.hue_shift + manual.hue_shift,
             vignette=max(self.vignette, manual.vignette),
             fade=max(self.fade, manual.fade),
+            shadows_hsl=self.shadows_hsl,
+            midtones_hsl=self.midtones_hsl,
+            highlights_hsl=self.highlights_hsl,
+            tone_curve=self.tone_curve,
+            luma_sat=self.luma_sat,
+            halation=max(self.halation, manual.halation),
         )
 
 
