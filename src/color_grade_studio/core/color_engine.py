@@ -124,6 +124,7 @@ def _grade_float_bgr(
     f = frame_bgr_float
     f = _exposure(f, params.exposure)
     f = _white_balance(f, params.temperature, params.tint)
+    f = _tone_curve(f, params.tone_curve)
     f = _lift_gamma_gain(
         f,
         params.shadows_rgb,
@@ -131,9 +132,14 @@ def _grade_float_bgr(
         params.highlights_rgb,
     )
     f = _contrast(f, params.contrast)
+    f = _three_way_hsl(
+        f, params.shadows_hsl, params.midtones_hsl, params.highlights_hsl,
+    )
+    f = _luma_sat(f, params.luma_sat)
     f = _saturation(f, params.saturation)
     if abs(params.hue_shift) > 1e-4:
         f = _hue_shift(f, params.hue_shift)
+    f = _halation(f, params.halation)
     if params.fade > 1e-4:
         f = _fade(f, params.fade)
     if include_vignette and params.vignette > 1e-4:

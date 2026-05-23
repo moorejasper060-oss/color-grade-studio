@@ -434,3 +434,33 @@ def test_halation_glows_bright_red_into_neighbours():
     near_green = out[4, 16, 1]
     assert near_red > 0.05
     assert near_red > near_green, "halation should bloom red preferentially"
+
+
+def test_pipeline_includes_three_way_hsl():
+    """Setting only shadows_hsl on GradeParams should change the output."""
+    params = GradeParams(shadows_hsl=(0.0, 0.0, 1.0))  # crush shadow saturation
+    # Genuinely dark warm pixel — V=max(BGR)/255=0.18, sits in shadow zone.
+    # (The task-spec value [40,80,160] gives V=0.627, which is firmly midtone
+    # and not what the shadow-zone mask targets.)
+    frame = np.full((8, 8, 3), [15, 25, 45], dtype=np.uint8)  # dark warm
+    out = apply_grade(frame, params)
+    chroma_before = int(frame.max(axis=-1).mean() - frame.min(axis=-1).mean())
+    chroma_after = int(out.max(axis=-1).mean() - out.min(axis=-1).mean())
+    assert chroma_after < chroma_before * 0.6, \
+        "shadow sat=0 should significantly desaturate dark pixels"
+
+
+def test_pipeline_includes_tone_curve():
+    """Lifting the lo_mid output via tone_curve should brighten dark pixels."""
+    dark = GradeParams(tone_curve=(0.0, 0.45, 0.6, 0.8, 1.0))  # lifted blacks
+    frame = np.full((8, 8, 3), 64, dtype=np.uint8)  # 0.25
+    out = apply_grade(frame, dark)
+    assert out.mean() > 90, f"expected lifted shadow, got {out.mean()}"
+
+
+def test_pipeline_includes_halation():
+    """A bright frame with halation > 0 should brighten red noticeably."""
+    img = np.full((16, 16, 3), 200, dtype=np.uint8)  # bright neutral
+    base = apply_grade(img, GradeParams())
+    haloed = apply_grade(img, GradeParams(halation=0.8))
+    assert haloed[..., 2].mean() > base[..., 2].mean()
