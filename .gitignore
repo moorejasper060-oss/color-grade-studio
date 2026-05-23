@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.pytest-tmp/
+.tox/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+
+# PyInstaller
+build/
+dist/
+*.spec
+*.spec.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project local
+sample_videos/
+sample_*.mp4
+sample_*.mov
+*.log
+out/
+exports/

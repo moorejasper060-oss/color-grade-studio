@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "color-grade-studio"
+version = "0.1.0"
+description = "Windows video editor with one-click color grading"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Jasper Moore" }]
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.6.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+]
+
+[project.scripts]
+color-grade-studio = "color_grade_studio.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--basetemp=.pytest-tmp"
